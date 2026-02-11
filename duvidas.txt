@@ -1,0 +1,10 @@
+
+# CRIACAO DO AMBIENTE VIRTUAL
+python -m venv .venv
+
+
+#ATIVACAO DO AMBIENTE VIRTUAL
+.\venv\Scripts\Activate.ps1 
+
+# INSTALACAO DAS BIBLIOTECAS NECESSÁRIAS
+pip install -r requirements.txt
