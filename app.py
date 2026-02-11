@@ -135,6 +135,12 @@ def modal_editar(row):
         st.markdown(f"**Criado por:** {row.get('criado_por', '---')}")
     with c2:
         st.markdown(f"**Meio de Contato:** {row['meio_atendimento']}")
+        
+        # Exibe se foi recepção ou não
+        is_recepcao = row.get('recepcao', False)
+        if is_recepcao:
+            st.markdown("📍 **Origem:** Recepção")
+        
         tel_raw = row.get('telefone')
         st.markdown(f"**Telefone:** {tel_raw or '---'}")
         if tel_raw:
@@ -161,36 +167,63 @@ def modal_editar(row):
     st.divider()
     st.markdown("#### ⚙️ Nova Interação")
     
-    with st.form(key=f"form_atd_{row['id']}"):
-        status_atual = row['andamento']
-        opcoes_status = ["Aguardando", "Concluído", "Excluído"]
-        idx_status = opcoes_status.index(status_atual) if status_atual in opcoes_status else 0
+    # === LÓGICA DE BLOQUEIO SE CONCLUÍDO ===
+    status_atual = row['andamento']
 
-        c_stat, c_atend = st.columns(2)
-        n_status = c_stat.selectbox("Atualizar Status", opcoes_status, index=idx_status)
-        n_atendente = c_atend.text_input("Atendente Responsável", value=row.get('quem_realizou') or "")
+    if status_atual == "Concluído":
+        st.warning("🔒 **Este chamado está CONCLUÍDO.** Não é possível realizar novas alterações.")
+        st.write("Deseja reabrir este chamado para continuar o atendimento?")
         
-        nova_interacao = st.text_area("Adicionar Nova Resposta", height=100, placeholder="Digite a atualização do atendimento aqui...")
-        
-        if st.form_submit_button("💾 Enviar Atualização", use_container_width=True):
-            if nova_interacao or n_status != status_atual or n_atendente != row.get('quem_realizou'):
-                ts = agora_utc_iso()
-                user_email = st.session_state.user.email
-                dt_fmt = agora_br().strftime("%d/%m/%Y às %H:%M")
-                
-                novo_bloco = ""
-                if nova_interacao: novo_bloco = f"\n\n**[{dt_fmt}] {user_email} escreveu:**\n{nova_interacao}\n___"
-                if n_status != status_atual: novo_bloco += f"\n\n*ℹ️ Status alterado de {status_atual} para {n_status} por {user_email} em {dt_fmt}*"
+        if st.button("🔄 Reabrir Chamado", key=f"btn_reopen_{row['id']}", type="primary"):
+            ts = agora_utc_iso()
+            user_email = st.session_state.user.email
+            dt_fmt = agora_br().strftime("%d/%m/%Y às %H:%M")
+            
+            # Log de Reabertura
+            log_reopen = f"\n\n--- 🔄 **CHAMADO REABERTO** por {user_email} em {dt_fmt} ---\n"
+            
+            upd = {
+                "andamento": "Aguardando", 
+                "tratativa": (historico_atual or "") + log_reopen,
+                "ultima_atualizacao": ts
+            }
+            
+            atualizar_atendimento(row['id'], upd)
+            st.success("Chamado reaberto com sucesso!")
+            time.sleep(1)
+            st.rerun()
 
-                upd = {"andamento": n_status, "quem_realizou": n_atendente, "tratativa": historico_atual + novo_bloco, "ultima_atualizacao": ts}
-                if n_status == "Concluído" and not row.get("data_conclusao"): upd["data_conclusao"] = ts
-                
-                atualizar_atendimento(row['id'], upd)
-                st.success("Atendimento atualizado!")
-                time.sleep(1)
-                st.rerun()
-            else:
-                st.warning("Nenhuma alteração realizada.")
+    else:
+        # === FORMULÁRIO PADRÃO (SE NÃO ESTIVER CONCLUÍDO) ===
+        with st.form(key=f"form_atd_{row['id']}"):
+            opcoes_status = ["Aguardando", "Concluído", "Excluído"]
+            idx_status = opcoes_status.index(status_atual) if status_atual in opcoes_status else 0
+
+            c_stat, c_atend = st.columns(2)
+            n_status = c_stat.selectbox("Atualizar Status", opcoes_status, index=idx_status)
+            n_atendente = c_atend.text_input("Atendente Responsável", value=row.get('quem_realizou') or "")
+            
+            nova_interacao = st.text_area("Adicionar Nova Resposta", height=100, placeholder="Digite a atualização do atendimento aqui...")
+            
+            if st.form_submit_button("💾 Enviar Atualização", use_container_width=True):
+                if nova_interacao or n_status != status_atual or n_atendente != row.get('quem_realizou'):
+                    ts = agora_utc_iso()
+                    user_email = st.session_state.user.email
+                    dt_fmt = agora_br().strftime("%d/%m/%Y às %H:%M")
+                    
+                    novo_bloco = ""
+                    if nova_interacao: novo_bloco = f"\n\n**[{dt_fmt}] {user_email} escreveu:**\n{nova_interacao}\n___"
+                    if n_status != status_atual: novo_bloco += f"\n\n*ℹ️ Status alterado de {status_atual} para {n_status} por {user_email} em {dt_fmt}*"
+
+                    upd = {"andamento": n_status, "quem_realizou": n_atendente, "tratativa": historico_atual + novo_bloco, "ultima_atualizacao": ts}
+                    if n_status == "Concluído" and not row.get("data_conclusao"): upd["data_conclusao"] = ts
+                    
+                    atualizar_atendimento(row['id'], upd)
+                    st.success("Atendimento atualizado!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.warning("Nenhuma alteração realizada.")
 
     st.write("")
     with st.expander("🔒 Editar/Corrigir Histórico Completo (Requer Senha)"):
@@ -370,6 +403,11 @@ if st.session_state.pagina == "Novo Atendimento":
             # INDEX=NONE FAZ O SELECT COMEÇAR VAZIO
             meio = st.selectbox("Meio de Contato *", ["WhatsApp", "Telefone", "E-mail", "Presencial"], index=None, placeholder="Selecione o meio...")
             atend = st.text_input("Atendente", value=USER_EMAIL)
+            
+            st.write("") # Espaçamento
+            # --- NOVO CHECKBOX SOLICITADO ---
+            is_recepcao = st.checkbox("📍 Atendimento via Recepção?")
+
         with c2:
             assunto = st.selectbox("Assunto *", ["Salário", "Benefícios", "Férias", "Ponto", "Outros"], index=None, placeholder="Selecione o assunto...")
             tel_input = st.text_input("Telefone (Opcional)", help="Digite apenas números com DDD.")
@@ -388,7 +426,9 @@ if st.session_state.pagina == "Novo Atendimento":
                     "cpf": cpf_limpo, "telefone": tel_limpo,
                     "motivo_contato": motivo, "meio_atendimento": meio,
                     "assunto": assunto, "numero_chamado": st.session_state.ticket_atual,
-                    "andamento": "Aguardando"
+                    "andamento": "Aguardando",
+                    # --- ENVIANDO O NOVO CAMPO ---
+                    "recepcao": is_recepcao 
                 }
                 criar_atendimento(payload)
                 st.success("Registrado!")
@@ -414,11 +454,17 @@ elif st.session_state.pagina == "Listar Chamados":
     if not dados: st.info("Sem dados.")
     else:
         with st.expander("🔍 Filtros", expanded=True):
-            f1, f2, f3, f4 = st.columns([2,1,1,1])
+            # ADICIONADO COLUNA F5 PARA O FILTRO DE RECEPÇÃO
+            f1, f2, f3, f4, f5 = st.columns([2,1,1,1, 1]) 
             busca = f1.text_input("Buscar")
             d_ini = f2.date_input("Início", value=None)
             d_fim = f3.date_input("Fim", value=None)
             st_sel = f4.multiselect("Status", ["Aguardando", "Concluído"], default=["Aguardando", "Concluído"])
+            
+            # --- FILTRO NOVO ---
+            f5.write("") # Espaçador para alinhar
+            f5.write("")
+            filtro_recepcao = f5.toggle("Só Recepção") # Toggle para filtrar
 
         filtrados = []
         for r in dados:
@@ -434,8 +480,18 @@ elif st.session_state.pagina == "Listar Chamados":
                 dt_br = dt_r.astimezone(TZ_BR).date()
             except: continue
 
-            if (not busca or busca.lower() in str(r).lower()) and (not st_sel or r['andamento'] in st_sel) and (not d_ini or dt_br >= d_ini) and (not d_fim or dt_br <= d_fim):
-                filtrados.append(r)
+            # LÓGICA DE FILTRAGEM
+            # 1. Busca textual
+            if (busca and busca.lower() not in str(r).lower()): continue
+            # 2. Status
+            if (st_sel and r['andamento'] not in st_sel): continue
+            # 3. Datas
+            if (d_ini and dt_br < d_ini): continue
+            if (d_fim and dt_br > d_fim): continue
+            # 4. Recepção (NOVO)
+            if filtro_recepcao and not r.get('recepcao'): continue
+
+            filtrados.append(r)
 
         if 'pagina_atual_lista' not in st.session_state: st.session_state.pagina_atual_lista = 1
         itens = 10
@@ -455,8 +511,13 @@ elif st.session_state.pagina == "Listar Chamados":
             if len(texto_limpo) > 100: tratativa_preview = texto_limpo[:100] + "..."
             else: tratativa_preview = texto_limpo if texto_limpo else "..."
 
+            # Verifica se é recepção para mostrar no card
+            origem_tag = ""
+            if row.get('recepcao'):
+                origem_tag = '<span style="background:#FF9800; color:white; padding:3px 8px; border-radius:12px; font-size:0.75em; font-weight:bold; margin-left:5px;">📍 RECEPÇÃO</span>'
+
             card_html = f"""<div style="border-left:6px solid {cor}; background:{bg}; padding:15px; border-radius:8px; margin-bottom:10px; color:black;">
-            <div style="display:flex; justify-content:space-between;"><span style="font-weight:600;">{row['numero_chamado']} | {row['funcionario_atendido']}</span><span style="background:{cor}; color:white; padding:3px 8px; border-radius:12px; font-size:0.75em; font-weight:bold;">{status.upper()}</span></div>
+            <div style="display:flex; justify-content:space-between;"><span style="font-weight:600;">{row['numero_chamado']} | {row['funcionario_atendido']}</span><div>{origem_tag}<span style="background:{cor}; color:white; padding:3px 8px; border-radius:12px; font-size:0.75em; font-weight:bold; margin-left:5px;">{status.upper()}</span></div></div>
             <div style="font-size:0.85em; margin-top:5px; border-bottom:1px solid rgba(0,0,0,0.1); padding-bottom:5px;">📅 {formatar_data_br(row['data_atendimento'])} | 📂 {row['assunto']}</div>
             <div style="margin-top:8px; font-size:0.9em;"><strong>💬 Motivo:</strong> {row['motivo_contato']}</div>
             <div style="margin-top:5px; font-size: 0.9em; background: rgba(255,255,255,0.5); padding: 8px; border-radius: 4px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
@@ -472,7 +533,7 @@ elif st.session_state.pagina == "Listar Chamados":
             c_pg.number_input("Página", 1, total_pags, key="pagina_atual_lista")
 
 # =================================================================================
-# PÁGINA: DASHBOARD
+# PÁGINA: DASHBOARD (ATUALIZADO COM QUIOSQUE LIMITADO E GRÁFICO COLORIDO)
 # =================================================================================
 elif st.session_state.pagina == "Dashboard":
     c_head, c_date, c_ctrl = st.columns([2, 2, 2])
@@ -497,21 +558,26 @@ elif st.session_state.pagina == "Dashboard":
     if not raw.empty:
         raw['dt'] = pd.to_datetime(raw['data_atendimento'], utc=True).dt.tz_convert(TZ_BR).dt.date
         df = raw.copy()
+        
+        # Filtro de data
         if rng:
             if len(rng)==2: df = df[(df['dt']>=rng[0]) & (df['dt']<=rng[1])]
             elif len(rng)==1: df = df[df['dt']==rng[0]]
         
-        if df.empty: st.warning("Sem dados.")
+        if df.empty: st.warning("Sem dados para o período.")
         else:
             tot = len(df)
             ab = len(df[df['andamento']=='Aguardando'])
             co = len(df[df['andamento']=='Concluído'])
+            
+            # Som de notificação
             if 'lt' not in st.session_state: st.session_state.lt = tot
             if tot > st.session_state.lt and som:
                 reproduzir_bip()
                 st.toast("Novo chamado!", icon="🔔")
             st.session_state.lt = tot
             
+            # --- CARDS DE MÉTRICAS ---
             def card(tit, val, per_val, cor, bg="#1e1e1e", show_per=True):
                 if show_per: per_html = f'<p style="margin:0; font-size:0.8em; font-weight:bold; color:{cor};">{per_val:.1f}% do total</p>'
                 else: per_html = '<p style="margin:0; font-size:0.8em; color:transparent;">.</p>'
@@ -523,14 +589,58 @@ elif st.session_state.pagina == "Dashboard":
             c2.markdown(card("EM ABERTO", ab, (ab/tot)*100 if tot>0 else 0, "#007bff", "#262730", show_per=True), unsafe_allow_html=True)
             c3.markdown(card("CONCLUÍDOS", co, (co/tot)*100 if tot>0 else 0, "#28a745", "#262730", show_per=True), unsafe_allow_html=True)
             
-            st.markdown("<br><br>", unsafe_allow_html=True)
-            chart = alt.Chart(df['assunto'].value_counts().reset_index().set_axis(['Assunto','Qtd'], axis=1)).mark_bar().encode(
-                x='Qtd', y=alt.Y('Assunto', sort='-x'), tooltip=['Assunto','Qtd']
-            ).properties(height=400)
-            st.altair_chart(chart, use_container_width=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # --- DIVISÃO: GRÁFICO (ESQ) | QUIOSQUE (DIR) ---
+            c_chart, c_kiosk = st.columns([1.8, 1.2])
+
+            with c_chart:
+                st.subheader("📊 Volumetria por Assunto")
+                # Gráfico com COR adicionada
+                chart = alt.Chart(df['assunto'].value_counts().reset_index().set_axis(['Assunto','Qtd'], axis=1)).mark_bar().encode(
+                    x='Qtd', 
+                    y=alt.Y('Assunto', sort='-x'),
+                    color=alt.Color('Assunto', legend=None), # Adiciona cor por categoria
+                    tooltip=['Assunto','Qtd']
+                ).properties(height=450)
+                st.altair_chart(chart, use_container_width=True)
+
+            with c_kiosk:
+                st.subheader("🛑 Últimas Ocorrências")
+                
+                # LIMITADO A 4 REGISTROS
+                recentes = df.sort_values(by='data_atendimento', ascending=False).head(4)
+                
+                if recentes.empty:
+                    st.info("Nenhuma ocorrência recente.")
+                else:
+                    for i, row in recentes.iterrows():
+                        status = row['andamento']
+                        if status == "Concluído": cor_st = "#28a745"
+                        elif status == "Excluído": cor_st = "#d32f2f"
+                        else: cor_st = "#0288d1"
+                        
+                        data_fmt = formatar_data_br(row['data_atendimento'])
+                        # Cria um card minimalista escuro
+                        kiosk_html = f"""
+                        <div style="border-left: 4px solid {cor_st}; background-color: #262730; padding: 10px; margin-bottom: 8px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.3);">
+                            <div style="font-weight: bold; font-size: 0.95em; color: white; display:flex; justify-content:space-between;">
+                                <span>{row['numero_chamado']}</span>
+                                <span style="font-size:0.75em; background:{cor_st}; padding: 1px 6px; border-radius:4px;">{status}</span>
+                            </div>
+                            <div style="font-size: 0.9em; color: #ddd; margin-top:2px;">{row['funcionario_atendido']}</div>
+                            <div style="font-size: 0.8em; color: #aaa; display: flex; justify-content: space-between; margin-top: 4px;">
+                                <span>📂 {row['assunto']}</span>
+                            </div>
+                            <div style="font-size: 0.75em; color: #888; margin-top: 4px; text-align: right;">
+                                🕒 {data_fmt}
+                            </div>
+                        </div>
+                        """
+                        st.markdown(kiosk_html, unsafe_allow_html=True)
             
     if live:
-        time.sleep(1)
+        time.sleep(2) # Atualização a cada 2s no modo Live
         st.rerun()
 
 # =================================================================================
